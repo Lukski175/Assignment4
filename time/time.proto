@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package time;
+option go_package = "https://github.com/Lukski175/Assignment4;time";
+import "google/protobuf/timestamp.proto";
+
+service Critical {
+    rpc RequestAccess (Peer) returns (Reply) {}
+    rpc ProposeCandidate (Peer) returns (Reply) {}
+    rpc CriticalDone (Peer) returns (Reply) {}
+}
+
+message Peer {
+    int32 id = 1;
+    google.protobuf.Timestamp time = 2;
+}
+
+message Reply {
+}
