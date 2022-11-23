@@ -49,6 +49,7 @@ func main() {
 		}
 	}()
 
+	// For how many clients we expect, dial each peer
 	for i := 0; i < numberOfClients; i++ {
 		port := int32(5000) + int32(i)
 
@@ -68,14 +69,14 @@ func main() {
 
 		log.Printf("Clients connected: %d", len(p.clients))
 	}
+	log.Printf("Connection established")
+	log.Printf("")
 
-	time.Sleep(5 * time.Second)
-
-	//Client loop
+	// Client loop
 	for {
-		//If client isnt waiting for its access to critical
+		// If client isnt waiting for its access to critical
 		if !waitingForAccess {
-			//Request access
+			// Request access
 			pear := &pb.Peer{Id: p.id, Time: timestamppb.Now()}
 			waitingForAccess = true
 			for _, cl := range p.clients {
@@ -87,11 +88,8 @@ func main() {
 			p.Access(pear)
 		}
 
-		time.Sleep(2 * time.Second)
-
 		if criticalUnlocked {
-			//If critical section is unlocked, ill propose my candidate to enter
-			log.Printf("Q Length: %d", len(p.criticalQueue))
+			// If critical section is unlocked, ill propose my candidate to enter
 			if len(p.criticalQueue) > 0 {
 				proposing = true
 				criticalUnlocked = false
@@ -116,6 +114,7 @@ func (p *peer) RequestAccess(ctx context.Context, peer *pb.Peer) (*pb.Reply, err
 }
 
 func (p *peer) Access(peer *pb.Peer) {
+	// If the client wants to access critical, append to the queue
 	p.criticalQueue = append(p.criticalQueue, peer)
 }
 
@@ -125,14 +124,16 @@ var candidates = make([]*pb.Peer, 0)
 var finalCandidateId int
 
 func (p *peer) DoPropose(ctx context.Context) {
-	//Propose candidate
 
+	// Propose candidate
 	var lowestTime *timestamppb.Timestamp
 	var candidate *pb.Peer
 	var criticalQueuePrint string
 	criticalQueuePrint = "Critical Queue: "
 	for i := 0; i < len(p.criticalQueue); i++ {
 		criticalQueuePrint += strconv.Itoa(int(p.criticalQueue[i].Id)) + " "
+
+		// Loop through each client to determine the client with the lowest time, which has priority
 		if i == 0 || lowestTime.AsTime().After(p.criticalQueue[i].Time.AsTime()) {
 			candidate = p.criticalQueue[i]
 			lowestTime = candidate.Time
@@ -143,48 +144,67 @@ func (p *peer) DoPropose(ctx context.Context) {
 	log.Printf("I propose: %d", candidate.Id)
 	pear := &pb.Peer{Id: candidate.Id, Time: lowestTime}
 	for _, cl := range p.clients {
+		//Proposes candidate to other clients
 		_, err := cl.ProposeCandidate(ctx, pear)
 		if err != nil {
 			log.Printf("%s", err)
 		}
 	}
+	//Proposes candidate to self
 	p.ProposeCandidate(ctx, pear)
 }
 
 func (p *peer) ProposeCandidate(ctx context.Context, peer *pb.Peer) (*pb.Reply, error) {
+	// This is needed, unsure why
+	time.Sleep(2 * time.Second)
+
 	savingCandidate.Lock()
 	proposedAmount++
 	candidates = append(candidates, peer)
 	if proposedAmount >= numberOfClients {
+		// Calculates final candidate
 		var time *timestamppb.Timestamp
 		var candidate *pb.Peer
+		candidatePrint := "Proposed candidates: "
 		for i := 0; i < len(candidates); i++ {
+			candidatePrint += strconv.Itoa(int(candidates[i].Id)) + " "
 			if i == 0 || time.AsTime().After(candidates[i].Time.AsTime()) {
 				candidate = candidates[i]
 				time = candidate.Time
 			}
 		}
+		log.Printf(candidatePrint)
 		finalCandidateId = int(candidate.Id)
 		log.Printf("Final candidate: %d", finalCandidateId)
-		log.Printf("")
-		//candidates = make([]*pb.Peer, 0)
+
+		// Resets values to make sure it runs next time
+		candidates = make([]*pb.Peer, 0)
 		proposing = false
 		proposedAmount = 0
-		//p.criticalQueue = make([]*pb.Peer, 0)
+		// Removes final candidate from critical queue
+		p.criticalQueue = Remove(p.criticalQueue, candidate)
+
+		// If i am the client to enter critical, i enter critical
+		// Every client has same code, so should be same for all
 		if finalCandidateId == int(p.id) {
 			p.DoCritical(ctx)
+		} else {
+			log.Printf("Client %d is entering the critical section", finalCandidateId)
 		}
 	}
 	savingCandidate.Unlock()
-	log.Printf("I have been proposed: %d", proposedAmount)
 	return &pb.Reply{}, nil
 }
 
+// Code where client in critical "executes" critical section (aka waits 5 seconds)
 func (p *peer) DoCritical(ctx context.Context) {
 	log.Print("Entering critical...")
-	time.Sleep(10 * time.Second)
 
-	//Done with critical stuff
+	time.Sleep(5 * time.Second) // Critical section :D
+
+	log.Print("Done with critical")
+
+	// Tell every client i am done with critical
 	pear := &pb.Peer{Id: p.id}
 	for _, cl := range p.clients {
 		_, err := cl.CriticalDone(ctx, pear)
@@ -196,15 +216,34 @@ func (p *peer) DoCritical(ctx context.Context) {
 	waitingForAccess = false
 }
 
+// Called on every client after critical is done
+// Just calls critical on self
 func (p *peer) CriticalDone(ctx context.Context, peer *pb.Peer) (*pb.Reply, error) {
 	Critical(peer)
 	return &pb.Reply{}, nil
 }
 
 func Critical(peer *pb.Peer) {
-	log.Printf("trying to open critical: %d, my final is %d", peer.Id, finalCandidateId)
+	log.Printf("Client %d is trying to open critical.", peer.Id)
+	// Validates if correct peer is trying to open critical
 	if finalCandidateId == int(peer.Id) {
-		log.Printf("The critical section is available again")
+		log.Printf("Access granted")
+		// Opens critical
 		criticalUnlocked = true
+		log.Printf("The critical section is available again")
+		log.Printf("")
 	}
+}
+
+// Function to remove a peer from critical queue
+func Remove(list []*pb.Peer, peer *pb.Peer) []*pb.Peer {
+	returnList := make([]*pb.Peer, 0)
+
+	for index, _ := range list {
+		p := list[index]
+		if p.Id != peer.Id {
+			returnList = append(returnList, list[index])
+		}
+	}
+	return returnList
 }
