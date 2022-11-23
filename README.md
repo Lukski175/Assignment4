@@ -1,5 +1,5 @@
 # Assignment4
-To run the programs, you must clone the assignment.
+To run the program, you must clone the assignment.
 After, you must navigate to \client and run client.go
 For the program to function as intended you must run 3 instances of client.go with the argument "0" to instantiate the first peer, and then for the other two peers: "1" and "2"
 (Example: "go run client.go 0")
